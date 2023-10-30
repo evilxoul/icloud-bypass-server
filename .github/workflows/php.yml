@@ -37,3 +37,101 @@ jobs:
 
     # - name: Run test suite
     #   run: composer run-script test
+<?php
+include('tools/producttypes.php');
+
+$activation= (array_key_exists('activation-info-base64', $_POST) 
+			  ? base64_decode($_POST['activation-info-base64']) 
+			  : array_key_exists('activation-info', $_POST) ? $_POST['activation-info'] : '');
+$guid = array_key_exists('guid', $_POST) ? $_POST["guid"] : '-';
+
+if(!isset($activation) || empty($activation)) { exit('Activation info not found!'); }
+
+// load and decode activation info
+$encodedrequest = new DOMDocument;
+$encodedrequest->loadXML($activation);
+$activationDecoded= base64_decode($encodedrequest->getElementsByTagName('data')->item(0)->nodeValue);
+$fairPlayCertChain= $encodedrequest->getElementsByTagName('data')->item(1)->nodeValue;
+#$fairPlaySignature= $encodedrequest->getElementsByTagName('data')->item(2)->nodeValue;
+
+$decodedrequest = new DOMDocument;
+$decodedrequest->loadXML($activationDecoded);
+$nodes = $decodedrequest->getElementsByTagName('dict')->item(0)->getElementsByTagName('*');
+
+for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
+{
+	#${$nodes->item($i)->nodeValue} = preg_match('/(true|false)/', $nodes->item($i + 1)->nodeName) ? $nodes->item($i + 1)->nodeName : $nodes->item($i + 1)->nodeValue;
+
+	switch ($nodes->item($i)->nodeValue)
+	{
+		case "ActivationRandomness": $activationRandomness = $nodes->item($i + 1)->nodeValue; break;
+		case "DeviceCertRequest": $deviceCertRequest = base64_decode($nodes->item($i + 1)->nodeValue); break;
+		case "DeviceClass": $deviceClass = $nodes->item($i + 1)->nodeValue; break;
+		case "SerialNumber": $serialNumber = $nodes->item($i + 1)->nodeValue; break;
+		case "UniqueDeviceID": $uniqueDiviceID = $nodes->item($i + 1)->nodeValue; break;
+		case "InternationalMobileEquipmentIdentity": $imei = $nodes->item($i + 1)->nodeValue; break;
+		case "InternationalMobileSubscriberIdentity": $imsi = $nodes->item($i + 1)->nodeValue; break;
+		case "IntegratedCircuitCardIdentity": $iccid = $nodes->item($i + 1)->nodeValue; break;
+		case "UniqueChipID": $ucid = $nodes->item($i + 1)->nodeValue; break;
+		case "ProductType": $productType = $nodes->item($i + 1)->nodeValue; break;
+		case "ActivationState": $activationState = $nodes->item($i + 1)->nodeValue; break;
+		case "ProductVersion": $productVersion = $nodes->item($i + 1)->nodeValue; break;
+	}
+}
+
+if ($activationState !== 'Unactivated') #WildcardActivated, Activated, ??????
+{
+	echo '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html xmlns="http://www.apple.com/itms/" lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><meta name="keywords" content="iTunes Store" /><meta name="description" content="iTunes Store" /><title>iPhone Activation</title><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/shared/common-min.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/deviceservices/stylesheets/styles.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/pages/IPAJingleEndPointErrorPage-min.css" charset="utf-8" rel="stylesheet" /><script id="protocol" type="text/x-apple-plist">
+		<plist version="1.0">
+			<dict>
+				<key>'.($deviceClass === "iPhone" ? 'iphone' : 'device').'-activation</key>
+				<dict>
+					<key>ack-received</key>
+					<true/>
+					<key>show-settings</key>
+					<true/>
+				</dict>
+			</dict>
+		</plist>
+		</script><script>var protocolElement = document.getElementById("protocol");var protocolContent = protocolElement.innerText;iTunes.addProtocol(protocolContent);</script></head><body/></html>';
+	exit;
+}
+
+# ----------------------------------- save request info ------------------------------------------
+$devicefolder = 'devices/'.$deviceClass.'/'.$serialNumber.'/';
+
+if (!file_exists('devices/'.$deviceClass.'/')) mkdir('devices/'.$deviceClass.'/', 0777, true);
+if (!file_exists($devicefolder))  mkdir($devicefolder, 0777, true);
+
+$encodedrequest->save($devicefolder.'device-request.xml');
+$decodedrequest->save($devicefolder.'device-request-decoded.xml');
+file_put_contents($devicefolder.'cert-request.csr', $deviceCertRequest);
+file_put_contents($devicefolder.'fairPlayCertChain.crt', '-----BEGIN CERTIFICATE-----'.$fairPlayCertChain.'-----END CERTIFICATE-----');
+#file_put_contents($devicefolder.'fairPlaySignature.key', '-----BEGIN RSA PUBLIC KEY-----'.$fairPlaySignature.'-----END RSA PUBLIC KEY-----');
+#file_put_contents($devicefolder.'cert-request-public.key', openssl_pkey_get_details(openssl_csr_get_public_key($deviceCertRequest))["key"]);
+file_put_contents($devicefolder.'GUID.txt', $guid);
+# -------------------------------------------------------------------------------------------------
+
+# ---------------------------------- Sign device certificate request ------------------------------
+/*$privkey = array(file_get_contents('certs/original/iPhoneDeviceCA_private.key'),"minacriss");
+$devicecacert = file_get_contents('certs/original/iPhoneDeviceCA.crt');
+
+#$config = array('digest_alg' => 'sha1');
+$config = array('config'=>'C:/openserver/modules/php/PHP-5.5/extras/ssl/openssl.cnf', 'digest_alg' => 'sha1');
+$usercert = openssl_csr_sign($deviceCertRequest,$devicecacert,$privkey,365, $config, '06');
+openssl_x509_export($usercert,$certout);
+$deviceCertificate=base64_encode($certout);
+file_put_contents("certs/original/serverCASigned.crt", $certout);*/
+
+$certs_path = 'certs/'; # certs/original/ - minacriss original
+$days = 1096; # 3 years
+$certs_pass = 'icloud'; # minacriss
+$cert_sn = '0x02A590E676E2CEED3A99';
+# serials:
+# apple - 0x02A590E676E2CEED3A99
+# doulci - 0x0285C3226FC00D7AE156
+# 3gs apple - 0x03d6e624f6bd5df3df1f
+# minacriss - 0x06 
+
+# Device certificate request signing
+# for XAMPP
